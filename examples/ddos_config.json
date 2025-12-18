@@ -1,0 +1,48 @@
+{
+  "detection_rules": [
+    {
+      "name": "volumetric_flood",
+      "enabled": true,
+      "description": "Detect high-volume packet floods using OR logic",
+      "logic": "OR",
+      "thresholds": {
+        "pps": 1000,
+        "bps": 10485760
+      },
+      "action": {
+        "type": "temporary",
+        "duration": 300
+      }
+    },
+    {
+      "name": "sustained_attack",
+      "enabled": true,
+      "description": "Detect sustained attacks with both high PPS and BPS using AND logic",
+      "logic": "AND",
+      "thresholds": {
+        "pps": 500,
+        "bps": 5242880
+      },
+      "action": {
+        "type": "permanent"
+      }
+    },
+    {
+      "name": "moderate_traffic",
+      "enabled": false,
+      "description": "Conservative detection for moderate suspicious traffic (disabled by default)",
+      "logic": "AND",
+      "thresholds": {
+        "pps": 2000,
+        "bps": 20971520
+      },
+      "action": {
+        "type": "temporary",
+        "duration": 600
+      }
+    }
+  ],
+  "whitelist": [],
+  "monitoring_window": 10,
+  "check_interval": 5
+}
