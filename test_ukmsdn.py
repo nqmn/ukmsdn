@@ -114,6 +114,7 @@ def setup_environment():
     """Setup and clean environment before testing"""
     print("🧹 Preparing Environment")
     print("========================")
+    print("ℹ️  Services now auto-start via container entry points")
 
     # Step 1: Clean up any existing Mininet processes and interfaces
     print("1. Cleaning up existing Mininet processes...")
@@ -124,32 +125,36 @@ def setup_environment():
     else:
         print("   ⚠️  Mininet cleanup had warnings (normal)")
 
-    # Step 2: Restart OpenVSwitch service
-    print("2. Restarting OpenVSwitch service...")
-    ovs_cmd = 'podman exec ukm_mininet /opt/ukmsdn/scripts/start_ovs.sh'
-    success, stdout, stderr = run_command(ovs_cmd, timeout=60)
-    output = stdout + stderr
-    if success and ("OpenVSwitch is ready for use" in output or "OpenVSwitch started successfully" in output):
-        print("   ✅ OpenVSwitch service restarted successfully")
-        print("   📍 Detected userspace datapath mode")
+    # Step 2: Verify OpenVSwitch service (auto-started by entry point)
+    print("2. Verifying OpenVSwitch service (auto-started)...")
+    cmd = 'podman exec ukm_mininet pgrep -f ovsdb-server'
+    success, stdout, stderr = run_command(cmd)
+    if success:
+        print("   ✅ OpenVSwitch service running")
+        print("   📍 Userspace datapath mode (auto-started)")
     else:
-        print("   ❌ OpenVSwitch restart failed")
-        print("   Error:", stderr[-300:] if stderr else "Unknown error")
+        print("   ⚠️  OpenVSwitch not running - checking entry point logs...")
+        log_cmd = 'podman exec ukm_mininet tail -20 /var/log/ukmsdn/mininet_entrypoint.log'
+        success, stdout, stderr = run_command(log_cmd)
+        if stdout:
+            print(f"   Entry point log:\n{stdout}")
         return False
 
-    # Step 3: Check if Ryu controller is running and get its IP
-    print("3. Checking Ryu controller...")
+    # Step 3: Verify Ryu controller (auto-started by entry point)
+    print("3. Verifying Ryu controller (auto-started)...")
     cmd = 'podman exec ukm_ryu pgrep -f ryu-manager'
     success, stdout, stderr = run_command(cmd)
 
-    if not success:
-        print("   ⚠️  Ryu controller not running. Starting it...")
-        cmd = 'podman exec -d ukm_ryu bash -c "cd /opt/ukmsdn/ryu && ryu-manager ryu/app/simple_switch_13.py --verbose"'
-        run_command(cmd)
-        time.sleep(3)
-        print("   ✅ Ryu controller started")
-    else:
+    if success:
         print("   ✅ Ryu controller is running")
+    else:
+        print("   ⚠️  Ryu controller not running - checking entry point logs...")
+        log_cmd = 'podman exec ukm_ryu tail -20 /var/log/ukmsdn/ryu_entrypoint.log'
+        success, stdout, stderr = run_command(log_cmd)
+        if stdout:
+            print(f"   Entry point log:\n{stdout}")
+        # Don't fail - may still be starting
+        time.sleep(5)
 
     # Get controller IP address and verify connectivity
     print("4. Getting controller IP address...")
@@ -158,17 +163,18 @@ def setup_environment():
         print(f"   📍 Controller IP: {controller_ip}")
 
         # Verify controller is listening on port 6633
-        cmd = f'podman exec ukm_ryu netstat -tlnp | grep 6633'
+        cmd = f'podman exec ukm_ryu netstat -tlnp 2>/dev/null | grep 6633 || ss -tlnp 2>/dev/null | grep 6633'
         success, stdout, stderr = run_command(cmd)
         if success and "6633" in stdout:
             print("   ✅ Controller listening on port 6633")
         else:
-            print("   ⚠️  Controller may not be listening on port 6633")
+            print("   ⚠️  Controller may not be listening on port 6633 yet")
+            time.sleep(3)
     else:
         print("   ❌ Could not get controller IP address")
         return False
 
-    print("\n🎯 Environment setup completed successfully!")
+    print("\n🎯 Environment verified - services auto-started successfully!")
     return True
 
 def main():

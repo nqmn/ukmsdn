@@ -84,6 +84,7 @@ def setup_environment():
     """Setup and clean environment before testing"""
     print("🧹 Preparing Environment for 4-Network Topology")
     print("===============================================")
+    print("ℹ️  OVS and Ryu auto-start via container entry points")
 
     # Step 1: Clean up any existing Mininet processes and interfaces
     print("1. Cleaning up existing Mininet processes...")
@@ -94,16 +95,14 @@ def setup_environment():
     else:
         print("   ⚠️  Mininet cleanup had warnings (normal)")
 
-    # Step 2: Restart OpenVSwitch service
-    print("2. Restarting OpenVSwitch service...")
-    ovs_cmd = 'podman exec ukm_mininet /opt/ukmsdn/scripts/start_ovs.sh'
-    success, stdout, stderr = run_command(ovs_cmd, timeout=60)
-    output = stdout + stderr
-    if success and ("OpenVSwitch is ready for use" in output or "OpenVSwitch started successfully" in output):
-        print("   ✅ OpenVSwitch service restarted successfully")
+    # Step 2: Verify OpenVSwitch service (auto-started)
+    print("2. Verifying OpenVSwitch service (auto-started)...")
+    cmd = 'podman exec ukm_mininet pgrep -f ovsdb-server'
+    success, stdout, stderr = run_command(cmd)
+    if success:
+        print("   ✅ OpenVSwitch service running")
     else:
-        print("   ❌ OpenVSwitch restart failed")
-        print("   Error:", stderr[-300:] if stderr else "Unknown error")
+        print("   ❌ OpenVSwitch not running")
         return False
 
     # Step 3: Check and setup Ryu controller with correct file
