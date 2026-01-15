@@ -34,6 +34,32 @@ The system runs two primary containers connected via a custom Podman network (`u
 - Containers communicate via the `ukmsdn-network` (custom Podman network)
 - OpenVSwitch uses **userspace datapath mode** (`datapath=user`) for container compatibility - kernel datapath requires special capabilities
 - Dynamic IP address discovery is essential since container IPs are assigned at runtime
+- **Services auto-start via entry point scripts** with built-in process supervision and auto-restart capabilities
+
+### Auto-Start Architecture (NEW!)
+As of the latest update, UKMSDN features **automatic service startup**:
+
+#### Entry Point Scripts
+1. **`/opt/ukmsdn/container_scripts/mininet_entrypoint.sh`** (ukm_mininet)
+   - Auto-starts OpenVSwitch (ovsdb-server and ovs-vswitchd)
+   - Supervises OVS processes with 30-second health checks
+   - Auto-restarts OVS if it crashes
+   - Logs to `/var/log/ukmsdn/mininet_entrypoint.log`
+
+2. **`/opt/ukmsdn/container_scripts/ryu_entrypoint.sh`** (ukm_ryu)
+   - Auto-starts Ryu SDN controller with default app
+   - Supervises Ryu process with health monitoring
+   - Auto-restarts Ryu if it crashes
+   - Logs to `/var/log/ukmsdn/ryu_entrypoint.log` and `/var/log/ukmsdn/ryu_controller.log`
+
+#### Benefits
+- **No manual service startup required** - services start automatically when containers start
+- **Automatic recovery** - services restart if they crash
+- **Always ready** - works after container restarts or system reboots
+- **Better logging** - centralized logs for debugging
+- **Production-ready** - built-in process supervision
+
+See `AUTO_START_ARCHITECTURE.md` for detailed documentation.
 
 ## Setup and Initialization
 
@@ -46,13 +72,13 @@ sudo python3 setup_container.py
 
 **Key Setup Functions**:
 - `check_podman()`: Verifies/installs Podman
-- `build_base_image()`: Creates Ubuntu 24.04 base image with all dependencies pre-installed
+- `build_base_image()`: Creates Ubuntu 24.04 base image with all dependencies and entry point scripts
 - `cleanup_containers()`: Removes existing containers and network
 - `create_network()`: Creates `ukmsdn-network`
-- `create_containers()`: Instantiates the two containers
-- `install_mininet_container()`: Installs Mininet-specific tools and starts OpenVSwitch
-- `install_ryu_container()`: Clones Ryu from GitHub and installs it
-- `create_start_ovs_script()`: Generates `/opt/ukmsdn/scripts/start_ovs.sh` for OVS management
+- `create_containers()`: Instantiates containers with auto-start entry points and verifies services started
+- `install_mininet_container()`: Installs Mininet-specific tools (OVS now auto-starts via entry point)
+- `install_ryu_container()`: Clones Ryu from GitHub and installs it (Ryu now auto-starts via entry point)
+- `create_start_ovs_script()`: Generates `/opt/ukmsdn/scripts/start_ovs.sh` for manual OVS restart if needed
 - `show_final_status()`: Displays setup completion and usage instructions
 
 **Critical Implementation Detail**: The script dynamically retrieves the Ryu controller's IP at runtime because container IPs are assigned by Podman. Any code using the controller should call `podman inspect ukm_ryu --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'` to get the current IP.
@@ -67,15 +93,16 @@ python3 test_ukmsdn.py
 ```
 
 **Test Functions**:
-- `setup_environment()`: Cleans up Mininet state, restarts OVS, verifies Ryu is running
+- `setup_environment()`: Cleans up Mininet state, **verifies** auto-started OVS and Ryu services
 - `test_mininet_basic()`: Runs 2-host and standard SDN topology tests with pingall
 - `show_usage_examples()`: Displays practical usage patterns
 
 **Important**: Tests verify:
-1. OVS service is running in userspace mode
-2. Ryu controller is listening on port 6633
+1. OVS service auto-started and running in userspace mode
+2. Ryu controller auto-started and listening on port 6633
 3. Basic pingall connectivity between hosts works
 4. Controller can manage flows
+5. Entry point logs are accessible for debugging if services fail to start
 
 ## Common Development Commands
 
@@ -115,6 +142,19 @@ podman ps
 podman logs ukm_mininet
 podman logs ukm_ryu
 
+# NEW: View auto-start entry point logs
+podman exec ukm_mininet cat /var/log/ukmsdn/mininet_entrypoint.log
+podman exec ukm_ryu cat /var/log/ukmsdn/ryu_entrypoint.log
+podman exec ukm_ryu cat /var/log/ukmsdn/ryu_controller.log
+
+# Follow logs in real-time
+podman exec ukm_mininet tail -f /var/log/ukmsdn/mininet_entrypoint.log
+podman exec ukm_ryu tail -f /var/log/ukmsdn/ryu_controller.log
+
+# Check service status (services auto-start)
+podman exec ukm_mininet pgrep -f ovsdb-server
+podman exec ukm_ryu pgrep -f ryu-manager
+
 # Monitor OVS flows
 podman exec ukm_mininet ovs-vsctl show
 podman exec ukm_mininet ovs-ofctl dump-flows s1
@@ -122,11 +162,12 @@ podman exec ukm_mininet ovs-ofctl dump-flows s1
 # Clean up stuck Mininet state
 podman exec ukm_mininet mn -c
 
-# Restart OVS service
+# Manual OVS restart (if needed - normally auto-restarts via supervision)
 podman exec ukm_mininet /opt/ukmsdn/scripts/start_ovs.sh
 
-# Check Ryu controller status
-podman exec ukm_ryu pgrep -f ryu-manager
+# Manual Ryu restart (supervision will detect and restart automatically)
+podman exec ukm_ryu pkill -f ryu-manager
+# Wait 30 seconds for supervision to auto-restart
 ```
 
 ### Code Formatting and Linting
@@ -149,6 +190,10 @@ ukmsdn/
 ├── LICENSE                     # Project license
 ├── README.md                   # User documentation
 ├── CLAUDE.md                   # This file
+├── AUTO_START_ARCHITECTURE.md  # NEW: Auto-start architecture documentation
+├── container_scripts/          # NEW: Container entry point scripts
+│   ├── mininet_entrypoint.sh   # OVS auto-start and supervision
+│   └── ryu_entrypoint.sh       # Ryu auto-start and supervision
 ├── backup_container/           # Container state backup utilities
 │   ├── backup_image.py         # Saves image and container metadata
 │   └── restore_backup.py       # Restores from backups
