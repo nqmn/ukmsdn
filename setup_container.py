@@ -107,8 +107,6 @@ RUN git clone https://github.com/nqmn/ryu.git /opt/ukmsdn/ryu && \\
     pip3 install --break-system-packages --no-deps -e /opt/ukmsdn/ryu && \\
     echo 'export PATH="/opt/ukmsdn/ryu/bin:$PATH"' >> /etc/profile.d/ryu.sh
 
-RUN mkdir -p /opt/ukmsdn/container_scripts /var/log/ukmsdn
-
 RUN touch /opt/ukmsdn/.base_image_ready
 '''
 
@@ -116,22 +114,6 @@ RUN touch /opt/ukmsdn/.base_image_ready
         dockerfile_path = os.path.join(workdir, 'Dockerfile')
         with open(dockerfile_path, 'w') as f:
             f.write(dockerfile_content)
-
-        # Copy entry point scripts to build context
-        mininet_entrypoint_src = os.path.join(os.path.dirname(__file__), 'container_scripts', 'mininet_entrypoint.sh')
-        ryu_entrypoint_src = os.path.join(os.path.dirname(__file__), 'container_scripts', 'ryu_entrypoint.sh')
-
-        if os.path.exists(mininet_entrypoint_src):
-            shutil.copy(mininet_entrypoint_src, os.path.join(workdir, 'mininet_entrypoint.sh'))
-        if os.path.exists(ryu_entrypoint_src):
-            shutil.copy(ryu_entrypoint_src, os.path.join(workdir, 'ryu_entrypoint.sh'))
-
-        # Add COPY and RUN commands for entry points to Dockerfile
-        with open(dockerfile_path, 'a') as f:
-            f.write('\n# Copy entry point scripts\n')
-            f.write('COPY mininet_entrypoint.sh /opt/ukmsdn/container_scripts/mininet_entrypoint.sh\n')
-            f.write('COPY ryu_entrypoint.sh /opt/ukmsdn/container_scripts/ryu_entrypoint.sh\n')
-            f.write('RUN chmod +x /opt/ukmsdn/container_scripts/*.sh\n')
 
         if not run_command(f'podman build -t "{base_image_name}" "{workdir}"', check=False):
             print("Failed to build base image.")
@@ -155,37 +137,16 @@ def create_network():
     run_command("podman network create ukmsdn-network", check=False)
 
 def create_containers(base_image_name):
-    """Create containers on custom network with auto-starting services"""
+    """Create containers on custom network"""
     print("")
-    print("📦 Creating Containers on Custom Network with Auto-Start")
-    print("=========================================================")
+    print("📦 Creating Containers on Custom Network")
+    print("========================================")
 
-    print("Creating Mininet container (ukm_mininet) with OVS auto-start...")
-    run_command(f'podman run -d --name ukm_mininet --privileged --network ukmsdn-network {base_image_name} /opt/ukmsdn/container_scripts/mininet_entrypoint.sh')
+    print("Creating Mininet container (ukm_mininet)...")
+    run_command(f'podman run -d --name ukm_mininet --privileged --network ukmsdn-network {base_image_name} sleep infinity')
 
-    print("Creating Ryu controller container (ukm_ryu) with Ryu auto-start...")
-    run_command(f'podman run -d --name ukm_ryu --privileged --network ukmsdn-network {base_image_name} /opt/ukmsdn/container_scripts/ryu_entrypoint.sh')
-
-    # Wait for services to initialize
-    print("")
-    print("⏳ Waiting for services to initialize...")
-    time.sleep(10)
-
-    # Verify OVS started in ukm_mininet
-    print("Verifying OVS service in ukm_mininet...")
-    cmd = 'podman exec ukm_mininet pgrep -f ovsdb-server'
-    if run_command(cmd, check=False):
-        print("   ✅ OVS service running")
-    else:
-        print("   ⚠️  OVS service not detected yet (may still be starting)")
-
-    # Verify Ryu started in ukm_ryu
-    print("Verifying Ryu controller in ukm_ryu...")
-    cmd = 'podman exec ukm_ryu pgrep -f ryu-manager'
-    if run_command(cmd, check=False):
-        print("   ✅ Ryu controller running")
-    else:
-        print("   ⚠️  Ryu controller not detected yet (may still be starting)")
+    print("Creating Ryu controller container (ukm_ryu)...")
+    run_command(f'podman run -d --name ukm_ryu --privileged --network ukmsdn-network {base_image_name} sleep infinity')
 
 def get_container_ip(container_name):
     """Get container IP address"""
@@ -280,9 +241,9 @@ fi
     try:
         # Copy the script to the container
         run_command(f'podman cp "{tmp_file_path}" ukm_mininet:/opt/ukmsdn/scripts/start_ovs.sh')
-        # Make it executable (but don't run it - entry point handles OVS auto-start)
+        # Make it executable and run it
         run_command('podman exec ukm_mininet chmod +x /opt/ukmsdn/scripts/start_ovs.sh')
-        print("   ℹ️  start_ovs.sh created for manual use (OVS auto-starts via entry point)")
+        run_command('podman exec ukm_mininet /opt/ukmsdn/scripts/start_ovs.sh')
     finally:
         # Clean up temporary file
         try:
@@ -311,9 +272,18 @@ else
   echo "Base image detected - skipping package installation for Mininet."
 fi
 
-echo "Setting up OpenVSwitch directories..."
+echo "Setting up OpenVSwitch (OVS)..."
 mkdir -p /var/run/openvswitch /var/log/openvswitch /etc/openvswitch
-echo "OVS will auto-start via entry point script"
+pkill -f ovsdb-server || true
+pkill -f ovs-vswitchd || true
+rm -f /var/run/openvswitch/db.sock /var/run/openvswitch/*.pid
+[ -f /etc/openvswitch/conf.db ] ||   ovsdb-tool create /etc/openvswitch/conf.db /usr/share/openvswitch/vswitch.ovsschema
+ovsdb-server --remote=punix:/var/run/openvswitch/db.sock   --remote=db:Open_vSwitch,Open_vSwitch,manager_options   --pidfile --detach --log-file
+sleep 2
+ovs-vsctl --no-wait init || true
+ovs-vswitchd --pidfile --detach --log-file
+sleep 3
+ovs-vsctl show || true
 
 useradd -m -s /bin/bash mininet || true
 echo 'mininet ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers || true
